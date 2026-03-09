@@ -7,19 +7,22 @@ import threading
 import os
 from dataclasses import dataclass
 from winotify import Notification
+import json
 
 PROCESS_EXTENSIONS = ['exe', 'dll', 'sys', 'src', 'com']
 
 # Paths
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
-icon_path = os.path.join(BASE_PATH, 'data/notification.ico')
-mp3_path = os.path.join(BASE_PATH, 'data/sound.mp3')
+icon_path = os.path.join(BASE_PATH, 'files/notification.ico')
+mp3_path = os.path.join(BASE_PATH, 'files/sound.mp3')
 list_path = os.path.join(BASE_PATH, 'data/list.txt')
 whilelist_path = os.path.join(BASE_PATH, 'data/whitelist.txt')
 log_path = os.path.join(BASE_PATH, 'data/app.log')
 if not os.path.exists(log_path):
     with open(log_path, 'w', encoding='utf-8') as file:
         file.write('app.log')
+
+
 
 def run_logging():
     logger = logging.getLogger()
@@ -61,10 +64,8 @@ class Process_Killer:
 
         self.processes = self._load_processes_from_list()
         self.whitelist = self._load_whitelist_processes()
-        print(self.whitelist)
         self.last_notification = {}
         self.log_stats_count = 0
-        self._log_success('__init__', f'Processes: {self.processes}')
 
     #==== Initialization methods ====
     def _init_config(self):
@@ -72,12 +73,20 @@ class Process_Killer:
         self.mp3_path = self.config.MP3_PATH
         self.list_path = self.config.LIST_PATH
         self.whitelist_path = self.config.WHITELIST_PATH
-        self.log_path = self.config.LOG_PATH
         self.checker_sleep_time = self.config.CHECKER_SLEEP_TIME
-        self.anti_spam_time = self.config.ANTI_SPAM_TIME 
+        self.anti_spam_time = self.config.ANTI_SPAM_TIME
+
+        self.log_path = os.path.join(BASE_PATH, 'data/app.log')# app.log
+        if not os.path.exists(self.log_path):
+            with open(self.log_path, 'w', encoding='utf-8') as file:
+                file.write(self.log_path)
+        self.stats_path = os.path.join(BASE_PATH, 'data/stats.json') # stats.json
+        if not os.path.exists(self.stats_path):
+            with open(self.stats_path, 'w', encoding='utf-8') as file:
+                json.dump({}, file, indent=4, ensure_ascii=False)
     def _validate_files(self):
         try:
-            paths = [self.list_path, self.whitelist_path, self.icon_path, self.mp3_path]
+            paths = [self.list_path, self.whitelist_path, self.icon_path, self.mp3_path, self.log_path, self.stats_path]
             missing_files = [p for p in paths if not os.path.exists(p)]
             if missing_files:
                 for f in missing_files:
@@ -87,12 +96,25 @@ class Process_Killer:
         except Exception as e:
             self._log_error('_validate_files', f'Unexpectable {e}')
     def _init_stats(self):
-        self.stats = {
-            'total_checks': 0,
-            'total_kills': 0,
-            'total_errors': 0,
-            'start_time': time.time()
-        }
+        with open(self.stats_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+            if not data:
+                self._log_error('_init_stats', 'stats.json is empty')
+                self.stats = {
+                    'total_checks': 0,
+                    'total_kills': 0,
+                    'total_errors': 0,
+                    'start_time': time.time()
+                }
+            else:
+                self._log_success('_init_stats', f'stats.json has got info: {data}')
+                self.stats = data
+        # self.stats = {
+        #     'total_checks': 0,
+        #     'total_kills': 0,
+        #     'total_errors': 0,
+        #     'start_time': time.time()
+        # }
 
     # ==== Loading data methods ====
     def _load_processes_from_list(self):
@@ -108,6 +130,7 @@ class Process_Killer:
                 self._log_error('_load_processes_from_file', 'list.txt is empty or has got incorrect format data')
                 return {}
             self.running = True
+            self._log_success('_load_processes_from_list', f'Processes: {data_dict}')
             return data_dict
         except FileNotFoundError:
             self._log_error('_load_processes_from_file', 'list.txt not found')
@@ -126,6 +149,7 @@ class Process_Killer:
                     self._log_error('_load_whitelist_processes', f'Uncorrect process format - {proc_name}')
                     continue
                 new_data.append(proc_name)
+            self._log_success('_load_whitelist_processes', f'White processes: {new_data}')
             return new_data
         except Exception as e:
             self._log_error('_load_whitelist_processes', f'Unexpectable {e}')
@@ -162,8 +186,8 @@ class Process_Killer:
     def _kill_process(self, proc):
         try:
             proc.kill()
-            self._log_success('_kill_process', f'Process {proc.info['name']} (PID:{proc.info['pid']}) has been stoped')
             self.stats['total_kills'] += 1
+            self._log_success('_kill_process', f'Process {proc.info['name']} (PID:{proc.info['pid']}) has been stoped')
         except Exception as e:
             self._log_error('_kill_process', f'Unexpectable {e}')
     def _is_process_running(self, proc):
@@ -221,7 +245,8 @@ class Process_Killer:
         logging.info(f'Success - ({func_name}): {msg if msg else 'No message'}')
     def _log_error(self, func_name: str, message: str):
         logging.error(f'Error - {func_name}: {message}')
-        self.stats['total_errors'] += 1
+        if self.stats:
+            self.stats['total_errors'] += 1
     def _log_stats(self):
         s = self.stats
         logging.info(f"""Stats:
@@ -229,6 +254,7 @@ class Process_Killer:
                      === Total kills - {s['total_kills']},
                      === Total errors - {s['total_errors']}
                      === Work's time{time.time() - s['start_time']:.2f}""")
+        
 
     # ==== Main methods ====
     def main(self, stats_auto: bool=False):
@@ -243,6 +269,7 @@ class Process_Killer:
                 self._log_stats()
                 self.log_stats_count = 0
                 self.reload_config()
+                self.write_stats_json()
             else:
                 self.log_stats_count += 1
     def stop(self):
@@ -259,8 +286,9 @@ class Process_Killer:
                 self.processes = new_processes
                 self._log_success('_reload_config', 'Reloading has been ended')
                 self._log_success('_reload_config', f'Processes: {self.processes}') if show_processes else None
-
-            
+    def write_stats_json(self):
+        with open(self.stats_path, 'w', encoding='utf-8') as file:
+            json.dump(self.stats, file, indent=4, ensure_ascii=False)
 
 #Config dataclass
 @dataclass
